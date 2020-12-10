@@ -47,7 +47,7 @@ their tip and approve the contract.
 This will emit a `CouponApproval` event for which bots can listen. When
 coupons become available, bots can call a variety of functions to redeem
 the coupons of one or more users. The users' new ESD will magically appear
-in their account, and the bot receives (at minimum) a 1% cut for their
+in their account, and the bot receives (at minimum) a 1.5% cut for their
 effort. Users can increase this tip size via the `setOffer` function.
 
 For more information, we recommend checking out the original repository. If
