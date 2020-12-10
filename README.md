@@ -18,16 +18,25 @@ A [previous version](https://github.com/Austin-Williams/coupon-clipper)
 of this contract, by [Austin Williams](https://github.com/Austin-Williams/)
 takes a 1% house fee and transfers funds to the house after redeeming *any*
 amount of coupons. To save on gas, we've updated it so that a separate
-function transfers accumulated fees to the house. We've also reduced the
-house cut to 0.5%, and the minimum tip to 1.5%.
+function transfers accumulated fees to the house.
 
-> Pro tip: You can use both versions simultaneously to increase the
-odds that a bot will redeem your coupons. You'll only pay the tip to the
-one that succeeds.
+We've also reduced the initial house fee to 0.5%. Every time a bot generates
+10000ESD for the house, the house's cut will be halved for that bot's
+transactions. This results in a more fair playing field for the bots, and
+rewards long-time players for their commitment.
+
+> An example: If Bot A has earned 15000ESD for the house, the house cut drops
+to `0.5/2 = 0.25%` for them. If Bot B has earned 30001ESD for the house, the
+house cut drops to `0.5/2**3 = 0.06%` for them. Due to rounding, the house
+cut eventually goes to zero.
+
+> Pro tip: You can use both versions (this and Austin William's)
+simultaneously to increase the odds that a bot will redeem your coupons.
+You'll only pay the tip to the one that succeeds.
 
 ## Deployed Contract
 
-`CouponClipper` is deployed to [0x4681D7Ba484a679D10F68D7f6F0E1222e93b5779](https://etherscan.io/address/0x4681D7Ba484a679D10F68D7f6F0E1222e93b5779)
+`CouponClipper` is deployed to [0x5fb89D51c236C4dfF35bf62b7821B6bF92611630](https://etherscan.io/address/0x5fb89D51c236C4dfF35bf62b7821B6bF92611630)
 and the code is verified on Etherscan.
 
 ## How does it work?

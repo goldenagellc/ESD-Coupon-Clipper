@@ -18,7 +18,7 @@ interface ICHI {
     function freeFromUpTo(address _addr, uint _amount) external returns (uint);
 }
 
-// @notice Lets anybody trustlessly redeem coupons on anyone else's behalf for a fee (minimum fee is 1.5%).
+// @notice Lets anybody trustlessly redeem coupons on anyone else's behalf for a fee (minimum fee is 2.0%).
 //    Requires that the coupon holder has previously approved this contract via the ESDS `approveCoupons` function.
 // @dev Bots should scan for the `CouponApproval` event emitted by the ESDS `approveCoupons` function to find out which 
 //    users have approved this contract to redeem their coupons.
@@ -30,10 +30,25 @@ contract CouponClipper {
     IESDS constant private ESDS = IESDS(0x443D2f2755DB5942601fa062Cc248aAA153313D3);
     ICHI  constant private CHI = ICHI(0x0000000000004946c0e9F43F4Dee607b0eF1fA1c);
 
-    uint constant private HOUSE_RATE = 50; // 50 basis points (0.5%) -- fee taken by the house
-    uint constant private MIN_OFFER = 150; // 150 basis points (1.5%) -- house fee, plus 1% to bot
+    // HOUSE_RATE_HALVING_AMNT -- Every time a bot brings in 10000ESD for the house, the house's
+    // rate will be cut in half *for that bot and that bot alone*:
+    // * 0.500% for 0 -> 10000ESD
+    // * 0.250% for 10000ESD -> 20000ESD
+    // * 0.125% for 20000ESD -> 30000ESD
+    // ...
+    uint constant private HOUSE_RATE_HALVING_AMNT = 10_000_000_000_000_000_000_000;
+    uint constant private HOUSE_RATE = 50; // 50 basis points (0.5%) -- initial fee taken by the house
+    uint constant private MIN_OFFER = 200; // 200 basis points (2.0%) -- house fee, plus 1.5% to bot
     
     address public house = 0x871ee4648d0FBB08F39857F41da256659Eab6334; // collector of house take
+
+    // The basis points offered by coupon holders to have their coupons redeemed -- default is 200 bps (2.0%)
+    // E.g., offers[_user] = 500 indicates that _user will pay 500 basis points (5%) to the caller
+    mapping(address => uint) private offers;
+    // The cumulative revenue (in ESD) earned by the house because of a given bot's hard work. Any time
+    // this value crosses a multiple of 10000, the house's take rate will be halved.
+    // NOTE: This advantage is non-transferrable. Bots are encouraged to keep their address constant
+    mapping(address => uint) private houseTakes;
     
     event SetOffer(address indexed user, uint offer);
     
@@ -46,14 +61,10 @@ contract CouponClipper {
         CHI.freeFromUpTo(msg.sender, (gasSpent + 14154) / 41947);
     }
 
-    // The basis points offered by coupon holders to have their coupons redeemed -- default is 150 bps (1.5%)
-    // E.g., offers[_user] = 500 indicates that _user will pay 500 basis points (5%) to the caller
-    mapping(address => uint) private offers;
-
     // @notice Gets the number of basis points the _user is offering the bots
-    // @dev The default value is 150 basis points (1.5%).
-    //   That is, `offers[_user] = 0` is interpretted as 1.5%.
-    //   This way users who are comfortable with the default 1.5% offer don't have to make any additional contract calls.
+    // @dev The default value is 200 basis points (2.0%).
+    //   That is, `offers[_user] = 0` is interpretted as 2.0%.
+    //   This way users who are comfortable with the default 2.0% offer don't have to make any additional contract calls.
     // @param _user The account whose offer we're looking up.
     // @return The number of basis points the account is offering to have their coupons redeemed
     function getOffer(address _user) public view returns (uint) {
@@ -62,12 +73,12 @@ contract CouponClipper {
     }
 
     // @notice Allows msg.sender to change the number of basis points they are offering.
-    // @dev _newOffer must be at least 150 (1.5%) and no more than 10_000 (100%)
+    // @dev _newOffer must be at least 200 (2.0%) and no more than 10_000 (100%)
     // @dev A user's offer cannot be *decreased* during the 15 minutes before the epoch advance (frontrun protection)
     // @param _offer The number of basis points msg.sender wants to offer to have their coupons redeemed.
     function setOffer(uint _newOffer) external {
         require(_newOffer <= 10_000, "Clipper: Offer above 100%");
-        require(_newOffer >= MIN_OFFER, "Clipper: Offer below 1.5%");
+        require(_newOffer >= MIN_OFFER, "Clipper: Offer below 2%");
 
         if (_newOffer < offers[msg.sender]) {
             uint nextEpochStartTime = getEpochStartTime(ESDS.epoch() + 1);
@@ -86,18 +97,27 @@ contract CouponClipper {
     // @return the fee (in ESD) owned to the bot (msg.sender)
     function _redeem(address _user, uint _epoch, uint _couponAmount) internal returns (uint) {
         // pull user's coupons into this contract (requires that the user has approved this contract)
-        ESDS.transferCoupons(_user, address(this), _epoch, _couponAmount); // @audit-info : reverts on failure
-        // redeem the coupons for ESD
-        ESDS.redeemCoupons(_epoch, _couponAmount); // @audit-info : reverts on failure
-        
-        // compute fees
-        uint botRate = getOffer(_user).sub(HOUSE_RATE);
-        uint botFee = _couponAmount.mul(botRate).div(10_000);
-        uint houseFee = _couponAmount.mul(HOUSE_RATE).div(10_000);
-        
-        // send the ESD to the user
-        ESD.transfer(_user, _couponAmount.sub(houseFee).sub(botFee)); // @audit-info : reverts on failure
-        return botFee;
+        try ESDS.transferCoupons(_user, address(this), _epoch, _couponAmount) {
+            // redeem the coupons for ESD
+            try ESDS.redeemCoupons(_epoch, _couponAmount) {
+                // compute fees
+                // (x >> y) is equivalent to (x / 2**y) for positive integers
+                uint houseRate = HOUSE_RATE >> houseTakes[msg.sender].div(HOUSE_RATE_HALVING_AMNT);
+                uint houseFee = _couponAmount.mul(houseRate).div(10_000);
+                houseTakes[msg.sender] = houseTakes[msg.sender].add(houseFee);
+
+                uint botRate = getOffer(_user).sub(houseRate);
+                uint botFee = _couponAmount.mul(botRate).div(10_000);
+                
+                // send the ESD to the user
+                ESD.transfer(_user, _couponAmount.sub(houseFee).sub(botFee)); // @audit-info : reverts on failure
+                return botFee;
+            } catch {
+                return 0;
+            }
+        } catch {
+            return 0;
+        }
     }
 
     // @notice Internal logic used to redeem coupons on the coupon holder's bahalf
