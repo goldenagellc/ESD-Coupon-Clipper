@@ -1,6 +1,6 @@
 # Coupon-Clipper
-A cheaper version of Austin Williams' Coupon Clipper. Easy-access UI will be
-available [here](https://emptyset.coupons/) within a week.
+A cheaper version of Austin Williams' Coupon Clipper. Easy-access UI is
+available [here](https://emptyset.coupons/).
 
 > Disclaimer: This code is not unaudited. Interact with it at your own risk,
 and *do not* send tokens to it. DeFi can be dangerous; exercise discretion.
