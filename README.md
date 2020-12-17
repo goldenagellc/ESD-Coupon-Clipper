@@ -20,14 +20,14 @@ takes a 1% house fee and transfers funds to the house after redeeming *any*
 amount of coupons. To save on gas, we've updated it so that a separate
 function transfers accumulated fees to the house.
 
-We've also reduced the initial house fee to 0.5%. Every time a bot generates
-10000ESD for the house, the house's cut will be halved for that bot's
+We've set the initial house fee to 50% of each offer. Every time a bot generates
+100000ESD for the house, the house's cut will be halved for that bot's
 transactions. This results in a more fair playing field for the bots, and
 rewards long-time players for their commitment.
 
-> An example: If Bot A has earned 15000ESD for the house, the house cut drops
-to `0.5/2 = 0.25%` for them. If Bot B has earned 30001ESD for the house, the
-house cut drops to `0.5/2**3 = 0.06%` for them. Due to rounding, the house
+> An example: If Bot A has earned 150000ESD for the house, the house cut drops
+to `50/2**1 = 25%` of each offer. If Bot B has earned 300001ESD for the house, the
+house cut drops to `50/2**3 = 12.5%` of each offer. Due to rounding, the house
 cut eventually goes to zero.
 
 > Pro tip: You can use both versions (this and Austin William's)
@@ -36,7 +36,7 @@ You'll only pay the tip to the one that succeeds.
 
 ## Deployed Contract
 
-`CouponClipper` is deployed to [0x5fb89D51c236C4dfF35bf62b7821B6bF92611630](https://etherscan.io/address/0x5fb89D51c236C4dfF35bf62b7821B6bF92611630)
+`CouponClipper` is deployed to [0xebc01361942167D6d312D0f12C11fa2ac5a06D81](https://etherscan.io/address/0xebc01361942167D6d312D0f12C11fa2ac5a06D81)
 and the code is verified on Etherscan.
 
 ## How does it work?
@@ -47,8 +47,8 @@ their tip and approve the contract.
 This will emit a `CouponApproval` event for which bots can listen. When
 coupons become available, bots can call a variety of functions to redeem
 the coupons of one or more users. The users' new ESD will magically appear
-in their account, and the bot receives (at minimum) a 1.5% cut for their
-effort. Users can increase this tip size via the `setOffer` function.
+in their account, and the bot receives (at minimum) a tip for their effort.
+Users can increase this tip size via the `setOffer` function.
 
 For more information, we recommend checking out the original repository. If
 you like this code, Austin is the one to thank.

@@ -18,7 +18,7 @@ interface ICHI {
     function freeFromUpTo(address _addr, uint _amount) external returns (uint);
 }
 
-// @notice Lets anybody trustlessly redeem coupons on anyone else's behalf for a fee (minimum fee is 2.0%).
+// @notice Lets anybody trustlessly redeem coupons on anyone else's behalf for a fee.
 //    Requires that the coupon holder has previously approved this contract via the ESDS `approveCoupons` function.
 // @dev Bots should scan for the `CouponApproval` event emitted by the ESDS `approveCoupons` function to find out which 
 //    users have approved this contract to redeem their coupons.
@@ -30,15 +30,15 @@ contract CouponClipper {
     IESDS constant private ESDS = IESDS(0x443D2f2755DB5942601fa062Cc248aAA153313D3);
     ICHI  constant private CHI = ICHI(0x0000000000004946c0e9F43F4Dee607b0eF1fA1c);
 
-    // HOUSE_RATE_HALVING_AMNT -- Every time a bot brings in 10000ESD for the house, the house's
+    // HOUSE_RATE_HALVING_AMNT -- Every time a bot brings in 100000ESD for the house, the house's
     // rate will be cut in half *for that bot and that bot alone*:
-    // * 0.500% for 0 -> 10000ESD
-    // * 0.250% for 10000ESD -> 20000ESD
-    // * 0.125% for 20000ESD -> 30000ESD
+    // * 50.0% of offer for 0 -> 100000ESD
+    // * 25.0% of offer 100000ESD -> 200000ESD
+    // * 12.5% of offer 200000ESD -> 300000ESD
     // ...
-    uint constant private HOUSE_RATE_HALVING_AMNT = 10_000_000_000_000_000_000_000;
-    uint constant private HOUSE_RATE = 50; // 50 basis points (0.5%) -- initial fee taken by the house
-    uint constant private MIN_OFFER = 200; // 200 basis points (2.0%) -- house fee, plus 1.5% to bot
+    uint constant private HOUSE_RATE_HALVING_AMNT = 100000e18;
+    uint constant private HOUSE_RATE = 5000; // 50% -- initial portion of the offer taken by house
+    uint constant private MAX_OFFER = 10000; // 100% -- obviously you can't offer more than 100%
     
     address public house = 0x871ee4648d0FBB08F39857F41da256659Eab6334; // collector of house take
 
@@ -46,7 +46,7 @@ contract CouponClipper {
     // E.g., offers[_user] = 500 indicates that _user will pay 500 basis points (5%) to the caller
     mapping(address => uint) private offers;
     // The cumulative revenue (in ESD) earned by the house because of a given bot's hard work. Any time
-    // this value crosses a multiple of 10000, the house's take rate will be halved.
+    // this value crosses a multiple of 100000, the house's take rate will be halved.
     // NOTE: This advantage is non-transferrable. Bots are encouraged to keep their address constant
     mapping(address => uint) private houseTakes;
     
@@ -62,23 +62,18 @@ contract CouponClipper {
     }
 
     // @notice Gets the number of basis points the _user is offering the bots
-    // @dev The default value is 200 basis points (2.0%).
-    //   That is, `offers[_user] = 0` is interpretted as 2.0%.
-    //   This way users who are comfortable with the default 2.0% offer don't have to make any additional contract calls.
     // @param _user The account whose offer we're looking up.
     // @return The number of basis points the account is offering to have their coupons redeemed
     function getOffer(address _user) public view returns (uint) {
-        uint offer = offers[_user];
-        return offer < MIN_OFFER ? MIN_OFFER : offer;
+        return offers[_user];
     }
 
     // @notice Allows msg.sender to change the number of basis points they are offering.
-    // @dev _newOffer must be at least 200 (2.0%) and no more than 10_000 (100%)
+    // @dev _newOffer must be no more than 10_000 (100%)
     // @dev A user's offer cannot be *decreased* during the 15 minutes before the epoch advance (frontrun protection)
     // @param _offer The number of basis points msg.sender wants to offer to have their coupons redeemed.
     function setOffer(uint _newOffer) external {
-        require(_newOffer <= 10_000, "Clipper: Offer above 100%");
-        require(_newOffer >= MIN_OFFER, "Clipper: Offer below 2%");
+        require(_newOffer <= MAX_OFFER, "Clipper: Offer too high");
 
         if (_newOffer < offers[msg.sender]) {
             uint nextEpochStartTime = getEpochStartTime(ESDS.epoch() + 1);
@@ -101,18 +96,20 @@ contract CouponClipper {
             // redeem the coupons for ESD
             try ESDS.redeemCoupons(_epoch, _couponAmount) {
                 // compute fees
-                // (x >> y) is equivalent to (x / 2**y) for positive integers
-                uint houseRate = HOUSE_RATE >> houseTakes[msg.sender].div(HOUSE_RATE_HALVING_AMNT);
-                uint houseFee = _couponAmount.mul(houseRate).div(10_000);
-                houseTakes[msg.sender] = houseTakes[msg.sender].add(houseFee);
-
-                uint botRate = getOffer(_user).sub(houseRate);
-                uint botFee = _couponAmount.mul(botRate).div(10_000);
-                
+                uint fee = _couponAmount.mul(getOffer(_user)).div(10_000);
                 // send the ESD to the user
-                ESD.transfer(_user, _couponAmount.sub(houseFee).sub(botFee)); // @audit-info : reverts on failure
-                return botFee;
+                ESD.transfer(_user, _couponAmount.sub(fee)); // @audit-info : reverts on failure
+
+                // (x >> y) is equivalent to (x / 2**y) for positive integers
+                uint houseRate = HOUSE_RATE >> houseTakes[tx.origin].div(HOUSE_RATE_HALVING_AMNT);
+                uint houseFee = fee.mul(houseRate).div(10_000);
+                houseTakes[tx.origin] = houseTakes[tx.origin].add(houseFee);
+
+                // return the bot fee
+                return fee.sub(houseFee);
             } catch {
+                // In this block the transfer succeeded but redemption failed, so we need to undo the transfer!!
+                ESDS.transferCoupons(address(this), _user, _epoch, _couponAmount);
                 return 0;
             }
         } catch {
@@ -156,16 +153,16 @@ contract CouponClipper {
     //    would be set to 221. The _targetEpoch is the epoch in which the coupon redemption will be attempted.
     function advanceAndRedeem(address _user, uint _epoch, uint _targetEpoch) external useCHI {
         // End execution early if tx is mined too early
-        if (block.timestamp < getEpochStartTime(_targetEpoch)) { return; }
+        if (block.timestamp < getEpochStartTime(_targetEpoch)) return;
         
         // advance epoch if it has not already been advanced 
-        if (ESDS.epoch() != _targetEpoch) { ESDS.advance(); }
+        if (ESDS.epoch() != _targetEpoch) ESDS.advance();
         
         // get max redeemable amount
         uint totalRedeemable = ESDS.totalRedeemable();
-        if (totalRedeemable == 0) { return; } // no coupons to redeem
+        if (totalRedeemable == 0) return; // no coupons to redeem
         uint userBalance = ESDS.balanceOfCoupons(_user, _epoch);
-        if (userBalance == 0) { return; } // no coupons to redeem
+        if (userBalance == 0) return; // no coupons to redeem
         uint maxRedeemableAmount = totalRedeemable < userBalance ? totalRedeemable : userBalance;
         
         // attempt to redeem coupons
